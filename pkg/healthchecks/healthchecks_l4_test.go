@@ -17,9 +17,11 @@ limitations under the License.
 package healthchecks
 
 import (
+	"testing"
+
+	"github.com/GoogleCloudPlatform/k8s-cloud-provider/pkg/cloud/meta"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/ingress-gce/pkg/composite"
-	"testing"
 )
 
 func TestMergeHealthChecks(t *testing.T) {
@@ -66,6 +68,12 @@ func TestMergeHealthChecks(t *testing.T) {
 			if wantHC.UnhealthyThreshold != tc.wantUnhealthyThreshold {
 				t.Errorf("wantHC.UnhealthyThreshold = %d; want %d", wantHC.UnhealthyThreshold, tc.unhealthyThreshold)
 			}
+			if wantHC.Region != "" {
+				t.Errorf("HealthCheck Region should not be set when region is not passed")
+			}
+			if wantHC.Scope != meta.Global {
+				t.Errorf("HealthCheck Scope shoudl be Global when Region is not passed")
+			}
 		})
 	}
 }
@@ -102,4 +110,26 @@ func TestCompareHealthChecks(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCreateRegionalHealthCheck(t *testing.T) {
+	t.Parallel()
+	namespaceName := types.NamespacedName{Name: "svc", Namespace: "default"}
+
+	for _, v := range []struct {
+		scope  meta.KeyType
+		region string
+	}{
+		{meta.Global, ""},
+		{meta.Regional, "us-central1"},
+	} {
+		hc := NewL4HealthCheck("hc", namespaceName, false, "/", 12345, v.region)
+		if hc.Region != v.region {
+			t.Errorf("HealthCheck Region mismatch! %v != %v", hc.Region, v.region)
+		}
+		if hc.Scope != v.scope {
+			t.Errorf("HealthCheck Scope mismatch! %v != %v", hc.Scope, v.scope)
+		}
+	}
+
 }

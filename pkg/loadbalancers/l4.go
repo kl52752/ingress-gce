@@ -17,11 +17,12 @@ limitations under the License.
 package loadbalancers
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
-	"fmt"
 	"github.com/GoogleCloudPlatform/k8s-cloud-provider/pkg/cloud"
 	"github.com/GoogleCloudPlatform/k8s-cloud-provider/pkg/cloud/meta"
 	corev1 "k8s.io/api/core/v1"
@@ -38,7 +39,6 @@ import (
 	"k8s.io/ingress-gce/pkg/utils/namer"
 	"k8s.io/klog"
 	"k8s.io/legacy-cloud-providers/gce"
-	"time"
 )
 
 const (
@@ -173,7 +173,7 @@ func (l *L4) EnsureInternalLoadBalancerDeleted(svc *corev1.Service) *SyncResult 
 		l.sharedResourcesLock.Lock()
 		defer l.sharedResourcesLock.Unlock()
 	}
-	err = utils.IgnoreHTTPNotFound(healthchecks.DeleteHealthCheck(l.cloud, hcName))
+	err = utils.IgnoreHTTPNotFound(healthchecks.DeleteHealthCheck(l.cloud, hcName, meta.Global))
 	if err != nil {
 		if !utils.IsInUsedByError(err) {
 			klog.Errorf("Failed to delete healthcheck for internal loadbalancer service %s, err %v", l.NamespacedName.String(), err)
@@ -192,7 +192,7 @@ func (l *L4) EnsureInternalLoadBalancerDeleted(svc *corev1.Service) *SyncResult 
 // This appends the protocol to the forwarding rule name, which will help supporting multiple protocols in the same ILB
 // service.
 func (l *L4) GetFRName() string {
-	_, _, protocol := utils.GetPortsAndProtocol(l.Service.Spec.Ports)
+	_, _, _, protocol := utils.GetPortsAndProtocol(l.Service.Spec.Ports)
 	return l.getFRNameWithProtocol(string(protocol))
 }
 
@@ -234,7 +234,7 @@ func (l *L4) EnsureInternalLoadBalancer(nodeNames []string, svc *corev1.Service)
 		// Take the lock when creating the shared healthcheck
 		l.sharedResourcesLock.Lock()
 	}
-	_, hcLink, err := healthchecks.EnsureL4HealthCheck(l.cloud, hcName, l.NamespacedName, sharedHC, hcPath, hcPort)
+	_, hcLink, err := healthchecks.EnsureL4HealthCheck(l.cloud, hcName, l.NamespacedName, sharedHC, hcPath, hcPort, meta.Global)
 	if sharedHC {
 		// unlock here so rest of the resource creation API can be called without unnecessarily holding the lock.
 		l.sharedResourcesLock.Unlock()
@@ -246,7 +246,7 @@ func (l *L4) EnsureInternalLoadBalancer(nodeNames []string, svc *corev1.Service)
 	}
 	result.Annotations[annotations.HealthcheckKey] = hcName
 
-	_, portRanges, protocol := utils.GetPortsAndProtocol(l.Service.Spec.Ports)
+	_, portRanges, _, protocol := utils.GetPortsAndProtocol(l.Service.Spec.Ports)
 
 	// ensure firewalls
 	sourceRanges, err := helpers.GetLoadBalancerSourceRanges(l.Service)

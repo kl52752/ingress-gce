@@ -27,6 +27,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/ingress-gce/pkg/frontendconfig"
 	"k8s.io/ingress-gce/pkg/ingparams"
+	"k8s.io/ingress-gce/pkg/l4netlb"
 	"k8s.io/ingress-gce/pkg/psc"
 	"k8s.io/ingress-gce/pkg/serviceattachment"
 	"k8s.io/ingress-gce/pkg/svcneg"
@@ -347,9 +348,15 @@ func runControllers(ctx *ingctx.ControllerContext) {
 	klog.V(0).Infof("firewall controller started")
 
 	ctx.Start(stopCh)
+
+	if flags.F.RunL4NetLbController {
+		l4netlbController := l4netlb.NewL4NetLbController(ctx, stopCh)
+		l4netlbController.Init()
+		klog.V(0).Infof("L4NetLb controller started")
+		go l4netlbController.Run()
+	}
 	lbc.Init()
 	lbc.Run()
-
 	for {
 		klog.Warning("Handled quit, awaiting pod deletion.")
 		time.Sleep(30 * time.Second)
