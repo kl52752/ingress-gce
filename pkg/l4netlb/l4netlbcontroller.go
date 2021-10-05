@@ -18,6 +18,7 @@ package l4netlb
 
 import (
 	"fmt"
+	"reflect"
 	"sync"
 
 	"github.com/GoogleCloudPlatform/k8s-cloud-provider/pkg/cloud/meta"
@@ -99,7 +100,27 @@ func NewL4NetLbController(
 		},
 		// Deletes will be handled in the Update when the deletion timestamp is set.
 		UpdateFunc: func(old, cur interface{}) {
-			//TODO(kl52752) add implementation
+			curSvc := cur.(*v1.Service)
+			svcKey := utils.ServiceKeyFunc(curSvc.Namespace, curSvc.Name)
+			oldSvc := old.(*v1.Service)
+			needsUpdate := l4netLb.needsUpdate(oldSvc, curSvc)
+
+			klog.V(3).Infof("Service %v needsUpdate %v", svcKey, needsUpdate)
+			if needsUpdate {
+				klog.V(3).Infof("Service %v changed, needsUpdate %v, enqueuing", svcKey, needsUpdate)
+				l4netLb.svcQueue.Enqueue(curSvc)
+				l4netLb.enqueueTracker.Track()
+				return
+			}
+			// Enqueue NetLB services periodically for reasserting that resources exist.
+			needsNetLb, _ := annotations.WantsNewL4NetLb(curSvc)
+			if needsNetLb && reflect.DeepEqual(old, cur) {
+				// this will happen when informers run a resync on all the existing services even when the object is
+				// not modified.
+				klog.V(3).Infof("Periodic enqueueing of %v", svcKey)
+				l4netLb.svcQueue.Enqueue(curSvc)
+				l4netLb.enqueueTracker.Track()
+			}
 		},
 	})
 	klog.Infof("l4NetLbController started")
@@ -234,4 +255,70 @@ func (lc *L4NetLbController) updateServiceStatus(svc *v1.Service, newStatus *v1.
 		return nil
 	}
 	return patch.PatchServiceLoadBalancerStatus(lc.ctx.KubeClient.CoreV1(), svc, *newStatus)
+}
+
+// needsUpdate checks if load balancer needs to be updated due to change in attributes.
+func (lc *L4NetLbController) needsUpdate(oldService *v1.Service, newService *v1.Service) bool {
+	oldSvcWantsILB, oldType := annotations.WantsNewL4NetLb(oldService)
+	newSvcWantsILB, newType := annotations.WantsNewL4NetLb(newService)
+	recorder := lc.ctx.Recorder(oldService.Namespace)
+	if oldSvcWantsILB != newSvcWantsILB {
+		recorder.Eventf(newService, v1.EventTypeNormal, "Type", "%v -> %v", oldType, newType)
+		return true
+	}
+
+	if !newSvcWantsILB && !oldSvcWantsILB {
+		// Ignore any other changes if both the previous and new service do not need ILB.
+		return false
+	}
+
+	if !reflect.DeepEqual(oldService.Spec.LoadBalancerSourceRanges, newService.Spec.LoadBalancerSourceRanges) {
+		recorder.Eventf(newService, v1.EventTypeNormal, "LoadBalancerSourceRanges", "%v -> %v",
+			oldService.Spec.LoadBalancerSourceRanges, newService.Spec.LoadBalancerSourceRanges)
+		return true
+	}
+
+	if !loadbalancers.PortsEqualForLBService(oldService, newService) || oldService.Spec.SessionAffinity != newService.Spec.SessionAffinity {
+		recorder.Eventf(newService, v1.EventTypeNormal, "Ports/SessionAffinity", "Ports %v, SessionAffinity %v -> Ports %v, SessionAffinity  %v",
+			oldService.Spec.Ports, oldService.Spec.SessionAffinity, newService.Spec.Ports, newService.Spec.SessionAffinity)
+		return true
+	}
+	if !reflect.DeepEqual(oldService.Spec.SessionAffinityConfig, newService.Spec.SessionAffinityConfig) {
+		recorder.Eventf(newService, v1.EventTypeNormal, "SessionAffinityConfig", "%v -> %v",
+			oldService.Spec.SessionAffinityConfig, newService.Spec.SessionAffinityConfig)
+		return true
+	}
+	if oldService.Spec.LoadBalancerIP != newService.Spec.LoadBalancerIP {
+		recorder.Eventf(newService, v1.EventTypeNormal, "LoadbalancerIP", "%v -> %v",
+			oldService.Spec.LoadBalancerIP, newService.Spec.LoadBalancerIP)
+		return true
+	}
+	if len(oldService.Spec.ExternalIPs) != len(newService.Spec.ExternalIPs) {
+		recorder.Eventf(newService, v1.EventTypeNormal, "ExternalIP", "Count: %v -> %v",
+			len(oldService.Spec.ExternalIPs), len(newService.Spec.ExternalIPs))
+		return true
+	}
+	for i := range oldService.Spec.ExternalIPs {
+		if oldService.Spec.ExternalIPs[i] != newService.Spec.ExternalIPs[i] {
+			recorder.Eventf(newService, v1.EventTypeNormal, "ExternalIP", "Added: %v",
+				newService.Spec.ExternalIPs[i])
+			return true
+		}
+	}
+	if !reflect.DeepEqual(oldService.Annotations, newService.Annotations) {
+		recorder.Eventf(newService, v1.EventTypeNormal, "Annotations", "%v -> %v",
+			oldService.Annotations, newService.Annotations)
+		return true
+	}
+	if oldService.Spec.ExternalTrafficPolicy != newService.Spec.ExternalTrafficPolicy {
+		recorder.Eventf(newService, v1.EventTypeNormal, "ExternalTrafficPolicy", "%v -> %v",
+			oldService.Spec.ExternalTrafficPolicy, newService.Spec.ExternalTrafficPolicy)
+		return true
+	}
+	if oldService.Spec.HealthCheckNodePort != newService.Spec.HealthCheckNodePort {
+		recorder.Eventf(newService, v1.EventTypeNormal, "HealthCheckNodePort", "%v -> %v",
+			oldService.Spec.HealthCheckNodePort, newService.Spec.HealthCheckNodePort)
+		return true
+	}
+	return false
 }
