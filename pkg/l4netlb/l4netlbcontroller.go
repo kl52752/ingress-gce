@@ -266,7 +266,10 @@ func (lc *L4NetLbController) needsUpdate(oldService *v1.Service, newService *v1.
 		recorder.Eventf(newService, v1.EventTypeNormal, "Type", "%v -> %v", oldType, newType)
 		return true
 	}
-
+	if !lc.hasForwardingRule(newService) {
+		// This service is handled by other controller
+		return false
+	}
 	if !newSvcWantsILB && !oldSvcWantsILB {
 		// Ignore any other changes if both the previous and new service do not need ILB.
 		return false
@@ -321,4 +324,10 @@ func (lc *L4NetLbController) needsUpdate(oldService *v1.Service, newService *v1.
 		return true
 	}
 	return false
+}
+
+func (lc *L4NetLbController) hasForwardingRule(svc *v1.Service) bool {
+	l4netlb := loadbalancers.NewL4NetLb(svc, lc.ctx.Cloud, meta.Regional, lc.namer, lc.ctx.Recorder(svc.Namespace), &lc.sharedResourcesLock)
+	existingFR := l4netlb.GetForwardingRule(l4netlb.GetFRName(), meta.VersionGA)
+	return existingFR != nil
 }
