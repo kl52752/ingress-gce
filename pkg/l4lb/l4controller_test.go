@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package l4
+package l4lb
 
 import (
 	context2 "context"
@@ -24,6 +24,8 @@ import (
 
 	"k8s.io/ingress-gce/pkg/loadbalancers"
 
+	"net/http"
+
 	"github.com/GoogleCloudPlatform/k8s-cloud-provider/pkg/cloud"
 	"github.com/GoogleCloudPlatform/k8s-cloud-provider/pkg/cloud/meta"
 	"github.com/GoogleCloudPlatform/k8s-cloud-provider/pkg/cloud/mock"
@@ -31,7 +33,7 @@ import (
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/util/retry"
-	"k8s.io/cloud-provider"
+	cloudprovider "k8s.io/cloud-provider"
 	"k8s.io/ingress-gce/pkg/annotations"
 	"k8s.io/ingress-gce/pkg/composite"
 	"k8s.io/ingress-gce/pkg/context"
@@ -39,7 +41,6 @@ import (
 	"k8s.io/ingress-gce/pkg/utils/common"
 	"k8s.io/ingress-gce/pkg/utils/namer"
 	"k8s.io/legacy-cloud-providers/gce"
-	"net/http"
 )
 
 const (
@@ -248,7 +249,7 @@ func TestProcessDeletion(t *testing.T) {
 	// Mark the service for deletion by updating timestamp. Use svc instead of newSvc since that has the finalizer.
 	newSvc.DeletionTimestamp = &v1.Time{}
 	updateILBService(l4c, newSvc)
-	if !needsDeletion(newSvc) {
+	if !l4c.needsDeletion(newSvc) {
 		t.Errorf("Incorrectly marked service %v as not needing ILB deletion", newSvc)
 	}
 	err = l4c.sync(getKeyForSvc(newSvc, t))
@@ -352,7 +353,7 @@ func TestProcessUpdateClusterIPToILBService(t *testing.T) {
 	if needsILB, _ := annotations.WantsL4ILB(clusterSvc); needsILB {
 		t.Errorf("Incorrectly marked service %v as needing ILB", clusterSvc)
 	}
-	if needsDeletion(clusterSvc) {
+	if l4c.needsDeletion(clusterSvc) {
 		t.Errorf("Incorrectly marked service %v as needing ILB deletion", clusterSvc)
 	}
 	// Change to Internal LoadBalancer type
