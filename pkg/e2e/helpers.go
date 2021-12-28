@@ -458,6 +458,55 @@ func CheckSvcEvents(s *Sandbox, svcName, msgType, message string, ignoreMessages
 	return false, nil
 }
 
+// CheckSvcUpdateEvents checks that the service has 2 consecutive events update and ensure.
+func CheckSvcUpdateEvents(s *Sandbox, svcName, updateMsg, ensureMsg string) (bool, error) {
+	svc, err := s.f.Clientset.CoreV1().Services(s.Namespace).Get(context.TODO(), svcName, metav1.GetOptions{})
+	if svc == nil || err != nil {
+		return false, fmt.Errorf("failed to get service %s/%s: %v", s.Namespace, svcName, err)
+	}
+
+	eventList, err := s.f.Clientset.CoreV1().Events(s.Namespace).Search(Scheme, svc)
+	if err != nil {
+		return false, fmt.Errorf("failed to get events: %q", err)
+	}
+	var updateEvent *v1.Event
+	for _, event := range eventList.Items {
+		if event.Type == v1.EventTypeNormal {
+			klog.Errorf("Found event of type %v: %v timestamp: %v", event.Type, event.Message, event.LastTimestamp)
+			if updateEvent == nil && strings.Contains(event.Message, updateMsg) {
+				klog.Errorf("Is Update event %s checked: %s time: %v", updateEvent, event.Message, event.LastTimestamp)
+				event := event
+				updateEvent = &event
+				break
+			}
+		}
+	}
+	if updateEvent == nil {
+		return false, nil
+	}
+	for _, event := range eventList.Items {
+		if event.Type == v1.EventTypeNormal {
+			// Check that ensure event happend after update.
+			if strings.Contains(event.Message, ensureMsg) && event.LastTimestamp.After(updateEvent.LastTimestamp.Time) {
+				return true, nil
+			}
+		}
+	}
+
+	return false, nil
+}
+
+func WaitForSvcUpdateEvents(s *Sandbox, svcName, upateMsg, ensureMsg string) error {
+	return wait.Poll(updateIngressPollInterval, negGCPollTimeout, func() (bool, error) {
+		isPresent, err := CheckSvcUpdateEvents(s, svcName, upateMsg, ensureMsg)
+		if err != nil {
+			klog.Infof("Error waiting for svc event err: %v", err)
+		}
+		return isPresent, err
+	})
+
+}
+
 // CheckGCLB whitebox testing is OK.
 func CheckGCLB(gclb *fuzz.GCLB, numForwardingRules int, numBackendServices int) error {
 	// Do some cursory checks on the GCP objects.
@@ -900,6 +949,49 @@ func CheckNegFinalizer(svcNeg negv1beta1.ServiceNetworkEndpointGroup) error {
 	return nil
 }
 
+// WaitForSvcFinalilzer waits until finalizer will be present in service meta data
+func WaitForSvcFinalilzer(s *Sandbox, svcName, finalizer string) error {
+	return wait.Poll(5*time.Second, negPollTimeout, func() (bool, error) {
+		svc, err := s.f.Clientset.CoreV1().Services(s.Namespace).Get(context.TODO(), svcName, metav1.GetOptions{})
+		if svc == nil || err != nil {
+			return false, fmt.Errorf("failed to get service %s/%s: %v", s.Namespace, svcName, err)
+		}
+		if !common.HasGivenFinalizer(svc.ObjectMeta, finalizer) {
+			return false, nil
+		}
+		return true, nil
+	})
+}
+
+// WaitForSvcFinalilzerDeleted waits until finalizer will be deleted from service meta data
+func WaitForSvcFinalilzerDeleted(s *Sandbox, svcName, finalizer string) error {
+	return wait.Poll(5*time.Second, negPollTimeout, func() (bool, error) {
+		svc, err := s.f.Clientset.CoreV1().Services(s.Namespace).Get(context.TODO(), svcName, metav1.GetOptions{})
+		if svc == nil || err != nil {
+			return true, nil
+		}
+		if common.HasGivenFinalizer(svc.ObjectMeta, finalizer) {
+			return false, nil
+		}
+		return true, nil
+	})
+}
+
+// WaitForNetLbAnnotations waits until Backend service key annotation will be present in service
+func WaitForNetLbAnnotations(s *Sandbox, svcName string) error {
+	return wait.Poll(15*time.Second, 2*negPollTimeout, func() (bool, error) {
+		svc, err := s.f.Clientset.CoreV1().Services(s.Namespace).Get(context.TODO(), svcName, metav1.GetOptions{})
+		if svc == nil || err != nil {
+			return false, fmt.Errorf("failed to get service %s/%s: %v", s.Namespace, svcName, err)
+		}
+		annotation, ok := svc.Annotations[annotations.BackendServiceKey]
+		if !ok || annotation == "" {
+			return false, nil
+		}
+		return true, nil
+	})
+}
+
 // WaitForSvcNegErrorEvents waits for at least one of the possibles messages to be emitted on the
 // namespace:svcName serice until timeout
 func WaitForSvcNegErrorEvents(s *Sandbox, svcName string, possibleMessages []string) error {
@@ -1098,4 +1190,45 @@ func Truncate(key string) string {
 		return fmt.Sprintf("%v%v", key[:62], "0")
 	}
 	return key
+}
+
+// WaitForNetLBServiceDeletion waits for L4NetLB finalizer to be deleted and then checks if
+// all GCE resources associated with the service was deleted
+func WaitForNetLBServiceDeletion(s *Sandbox, c cloud.Cloud, svcParams *fuzz.L4LBForSvcParams) error {
+	if err := WaitForSvcFinalilzerDeleted(s, svcParams.SvcName, common.NetLBFinalizerV2); err != nil {
+		return fmt.Errorf("Error waiting for svc finalizer: %q", err)
+	}
+	if err := fuzz.CheckL4NetLBServiceDeletion(context.Background(), c, svcParams); err != nil {
+		return fmt.Errorf("Error checking L4 NetLB service deletion err: %v", err)
+	}
+	return nil
+}
+
+// GetL4LBForSvcParams extract GCP resources name from NetLB service annotations
+func GetL4LBForSvcParams(s *Sandbox, svcName string) (*fuzz.L4LBForSvcParams, error) {
+	svc, err := s.f.Clientset.CoreV1().Services(s.Namespace).Get(context.TODO(), svcName, metav1.GetOptions{})
+	params := fuzz.L4LBForSvcParams{
+		VIP:                   svc.Status.LoadBalancer.Ingress[0].IP,
+		SvcName:               svcName,
+		BsName:                svc.Annotations[annotations.BackendServiceKey],
+		FwrName:               svc.Annotations[annotations.TCPForwardingRuleKey],
+		HcName:                svc.Annotations[annotations.HealthcheckKey],
+		HcFwRuleName:          svc.Annotations[annotations.FirewallRuleForHealthcheckKey],
+		FwRuleName:            svc.Annotations[annotations.FirewallRuleKey],
+		ExternalTrafficPolicy: string(svc.Spec.ExternalTrafficPolicy),
+	}
+	return &params, err
+}
+
+// CompareHealthChecks checks that given services have the same health check key annotation
+func CompareHealthChecks(s *Sandbox, svc1Name, svc2Name string) error {
+	svc1, _ := s.f.Clientset.CoreV1().Services(s.Namespace).Get(context.TODO(), svc1Name, metav1.GetOptions{})
+	svc2, _ := s.f.Clientset.CoreV1().Services(s.Namespace).Get(context.TODO(), svc2Name, metav1.GetOptions{})
+	hcNam1, _ := svc1.ObjectMeta.Annotations[annotations.HealthcheckKey]
+	hcNam2, _ := svc2.ObjectMeta.Annotations[annotations.HealthcheckKey]
+
+	if hcNam1 != hcNam2 {
+		return fmt.Errorf("LoadBalancers should share health checks")
+	}
+	return nil
 }
