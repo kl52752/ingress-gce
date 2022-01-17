@@ -19,7 +19,6 @@ package controller
 import (
 	"time"
 
-	apiv1 "k8s.io/api/core/v1"
 	listers "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/ingress-gce/pkg/context"
@@ -62,9 +61,8 @@ func NewNodeController(ctx *context.ControllerContext, stopCh chan struct{}) *No
 			c.queue.Enqueue(obj)
 		},
 		UpdateFunc: func(oldObj, newObj interface{}) {
-			if nodeStatusChanged(oldObj.(*apiv1.Node), newObj.(*apiv1.Node)) {
-				c.queue.Enqueue(newObj)
-			}
+			// Enable periodic sync to make sure that Instance Group always exist
+			c.queue.Enqueue(newObj)
 		},
 	})
 	return c
@@ -90,8 +88,14 @@ func (c *NodeController) Shutdown() {
 }
 
 func (c *NodeController) sync(key string) error {
+	klog.V(3).Infof("Sync Nodes")
 	nodeNames, err := utils.GetReadyNodeNames(listers.NewNodeLister(c.lister))
 	if err != nil {
+		klog.Errorf("Sync Nodes err: %v", err)
+		return err
+	}
+	klog.V(3).Infof("Sync Nodes %v", len(nodeNames))
+	if err := c.instancePool.EnsureInstanceGroupInAllZones(); err != nil {
 		return err
 	}
 	return c.instancePool.Sync(nodeNames)

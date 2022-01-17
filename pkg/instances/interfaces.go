@@ -31,8 +31,8 @@ type ZoneLister interface {
 // through the InstanceGroups interface. It handles zones opaquely using the zoneLister.
 type NodePool interface {
 	// The following 2 methods operate on instance groups.
-	EnsureInstanceGroupsAndPorts(name string, ports []int64) ([]*compute.InstanceGroup, error)
-	DeleteInstanceGroup(name string) error
+	EnsurePortsInInstanceGroups(name string, ports []int64) ([]*compute.InstanceGroup, error)
+	EnsureInstanceGroupInAllZones() error
 
 	// TODO: Refactor for modularity
 	Add(groupName string, nodeNames []string) error

@@ -73,7 +73,7 @@ type FakeInstanceGroups struct {
 func (f *FakeInstanceGroups) GetInstanceGroup(name, zone string) (*compute.InstanceGroup, error) {
 	f.calls = append(f.calls, utils.Get)
 	for _, ig := range f.instanceGroups {
-		if ig.Name == name && ig.Zone == zone {
+		if ig.Name == name && strings.Contains(ig.Zone, zone) {
 			return ig, nil
 		}
 	}
@@ -84,7 +84,7 @@ func (f *FakeInstanceGroups) GetInstanceGroup(name, zone string) (*compute.Insta
 // CreateInstanceGroup fakes instance group creation.
 func (f *FakeInstanceGroups) CreateInstanceGroup(ig *compute.InstanceGroup, zone string) error {
 	ig.SelfLink = cloud.NewInstanceGroupsResourceID("mock-project", zone, ig.Name).SelfLink(meta.VersionGA)
-	ig.Zone = zone
+	ig.Zone = cloud.NewZonesResourceID("mock-project", zone).ResourcePath()
 	f.instanceGroups = append(f.instanceGroups, ig)
 	return nil
 }
@@ -158,7 +158,7 @@ func (f *FakeInstanceGroups) RemoveInstancesFromInstanceGroup(name, zone string,
 func (f *FakeInstanceGroups) SetNamedPortsOfInstanceGroup(igName, zone string, namedPorts []*compute.NamedPort) error {
 	var ig *compute.InstanceGroup
 	for _, igp := range f.instanceGroups {
-		if igp.Name == igName && igp.Zone == zone {
+		if igp.Name == igName && strings.Contains(igp.Zone, zone) {
 			ig = igp
 			break
 		}

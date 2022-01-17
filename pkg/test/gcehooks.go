@@ -39,16 +39,8 @@ func ListInstancesWithErrorHook(context.Context, *meta.Key, *compute.InstanceGro
 	return nil, fmt.Errorf("ListInstancesWithErrorHook")
 }
 
-func AddInstancesErrorHook(context.Context, *meta.Key, *compute.InstanceGroupsAddInstancesRequest, *cloud.MockInstanceGroups) error {
-	return fmt.Errorf("AddInstancesErrorHook")
-}
-
 func GetErrorInstanceGroupHook(ctx context.Context, key *meta.Key, m *cloud.MockInstanceGroups) (bool, *compute.InstanceGroup, error) {
 	return true, nil, fmt.Errorf("GetErrorInstanceGroupHook")
-}
-
-func InsertErrorHook(ctx context.Context, key *meta.Key, obj *compute.InstanceGroup, m *cloud.MockInstanceGroups) (bool, error) {
-	return true, fmt.Errorf("InsertErrorHook")
 }
 
 func SetNamedPortsErrorHook(context.Context, *meta.Key, *compute.InstanceGroupsSetNamedPortsRequest, *cloud.MockInstanceGroups) error {

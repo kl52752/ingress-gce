@@ -753,3 +753,11 @@ func GetNetworkTier(service *api_v1.Service) (cloud.NetworkTier, bool) {
 		return cloud.NetworkTierDefault, false
 	}
 }
+
+// GetZoneFromURL extracts zone name from url.
+func GetZoneFromURL(zone string) (string, error) {
+	if !strings.Contains(zone, "zones") {
+		return "", fmt.Errorf("Wrong zone url %s", zone)
+	}
+	return zone[strings.LastIndex(zone, "/")+1:], nil
+}

@@ -74,9 +74,10 @@ func newLoadBalancerController() *LoadBalancerController {
 		HealthCheckPath:       "/",
 	}
 	ctx := context.NewControllerContext(nil, kubeClient, backendConfigClient, nil, nil, nil, nil, fakeGCE, namer, "" /*kubeSystemUID*/, ctxConfig)
-	lbc := NewLoadBalancerController(ctx, stopCh)
 	// TODO(rramkumar): Fix this so we don't have to override with our fake
-	lbc.instancePool = instances.NewNodePool(instances.NewFakeInstanceGroups(sets.NewString(), namer), namer, &test.FakeRecorderSource{}, utils.GetBasePath(fakeGCE), fakeZL)
+	ctx.InstancePool = instances.NewNodePool(instances.NewFakeInstanceGroups(sets.NewString(), namer), namer, &test.FakeRecorderSource{}, utils.GetBasePath(fakeGCE), fakeZL)
+	ctx.InstancePool.EnsureInstanceGroupInAllZones()
+	lbc := NewLoadBalancerController(ctx, stopCh)
 	lbc.l7Pool = loadbalancers.NewLoadBalancerPool(fakeGCE, namer, events.RecorderProducerMock{}, namer_util.NewFrontendNamerFactory(namer, ""))
 
 	lbc.hasSynced = func() bool { return true }
@@ -92,7 +93,7 @@ func newLoadBalancerController() *LoadBalancerController {
 		},
 	})
 	addService(lbc, defaultSvc)
-
+	lbc.instancePool.EnsureInstanceGroupInAllZones()
 	return lbc
 }
 
@@ -575,7 +576,7 @@ func TestEnsureMCIngress(t *testing.T) {
 	// Check Ingress has annotations noting the instance group name.
 	updatedIng, _ := lbc.ctx.KubeClient.NetworkingV1().Ingresses(ing.Namespace).Get(context2.TODO(), ing.Name, meta_v1.GetOptions{})
 	igAnnotationKey := "ingress.gcp.kubernetes.io/instance-groups"
-	wantVal := `[{"Name":"k8s-ig--aaaaa","Zone":"zone-a"}]`
+	wantVal := `[{"Name":"k8s-ig--aaaaa","Zone":"zones/zone-a"}]`
 	if val, ok := updatedIng.GetAnnotations()[igAnnotationKey]; !ok {
 		t.Errorf("Ingress.Annotations does not contain key %q", igAnnotationKey)
 	} else if val != wantVal {
@@ -623,7 +624,7 @@ func TestMCIngressIG(t *testing.T) {
 	}
 	igAnnotationKey := annotations.InstanceGroupsAnnotationKey
 	instanceGroupName := fmt.Sprintf("k8s-ig--%s", clusterUID)
-	wantVal := fmt.Sprintf(`[{"Name":%q,"Zone":"zone-a"}]`, instanceGroupName)
+	wantVal := fmt.Sprintf(`[{"Name":%q,"Zone":"zones/zone-a"}]`, instanceGroupName)
 	if val, ok := updatedMcIng.GetAnnotations()[igAnnotationKey]; !ok {
 		t.Errorf("updatedMcIng.GetAnnotations()[%q]= (_, %v), want true; invalid key, updatedMcIng = %v", igAnnotationKey, ok, updatedMcIng)
 	} else if diff := cmp.Diff(wantVal, val); diff != "" {
@@ -654,19 +655,18 @@ func TestMCIngressIG(t *testing.T) {
 		t.Errorf("lbc.instancePool.List()() mismatch (-want +got):\n%s", diff)
 	}
 
-	// Delete GCE multi-cluster ingress mcIng and verify that instance group is deleted.
+	// Delete GCE multi-cluster ingress mcIng and verify that instance group is not deleted.
 	deleteIngress(lbc, updatedMcIng)
 	if err := lbc.sync(mcIngStoreKey); err != nil {
 		t.Fatalf("lbc.sync(%v) = %v, want nil", mcIngStoreKey, err)
 	}
 
-	// Ensure that instance group is cleaned up.
+	// Ensure that instance group is not cleaned up.
 	instanceGroups, err = lbc.instancePool.List()
 	if err != nil {
 		t.Errorf("lbc.instancePool.List() = _, %v, want nil", err)
 	}
-	var wantInstanceGroups []string
-	if diff := cmp.Diff(wantInstanceGroups, instanceGroups); diff != "" {
+	if diff := cmp.Diff([]string{instanceGroupName}, instanceGroups); diff != "" {
 		t.Errorf("lbc.instancePool.List()() mismatch (-want +got):\n%s", diff)
 	}
 }

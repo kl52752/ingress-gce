@@ -42,7 +42,8 @@ func newNodePool(f *FakeInstanceGroups, zone string) NodePool {
 func TestNodePoolSync(t *testing.T) {
 	f := NewFakeInstanceGroups(sets.NewString([]string{"n1", "n2"}...), defaultNamer)
 	pool := newNodePool(f, defaultZone)
-	pool.EnsureInstanceGroupsAndPorts(defaultNamer.InstanceGroup(), []int64{80})
+	pool.EnsureInstanceGroupInAllZones()
+	pool.EnsurePortsInInstanceGroups(defaultNamer.InstanceGroup(), []int64{80})
 
 	// KubeNodes: n1
 	// GCENodes: n1, n2
@@ -61,7 +62,8 @@ func TestNodePoolSync(t *testing.T) {
 
 	f = NewFakeInstanceGroups(sets.NewString([]string{"n1"}...), defaultNamer)
 	pool = newNodePool(f, defaultZone)
-	pool.EnsureInstanceGroupsAndPorts(defaultNamer.InstanceGroup(), []int64{80})
+	pool.EnsureInstanceGroupInAllZones()
+	pool.EnsurePortsInInstanceGroups(defaultNamer.InstanceGroup(), []int64{80})
 
 	f.calls = []int{}
 	kubeNodes = sets.NewString([]string{"n1", "n2"}...)
@@ -77,7 +79,8 @@ func TestNodePoolSync(t *testing.T) {
 
 	f = NewFakeInstanceGroups(sets.NewString([]string{"n1", "n2"}...), defaultNamer)
 	pool = newNodePool(f, defaultZone)
-	pool.EnsureInstanceGroupsAndPorts(defaultNamer.InstanceGroup(), []int64{80})
+	pool.EnsureInstanceGroupInAllZones()
+	pool.EnsurePortsInInstanceGroups(defaultNamer.InstanceGroup(), []int64{80})
 
 	f.calls = []int{}
 	kubeNodes = sets.NewString([]string{"n1", "n2"}...)
@@ -91,6 +94,7 @@ func TestNodePoolSync(t *testing.T) {
 func TestSetNamedPorts(t *testing.T) {
 	f := NewFakeInstanceGroups(sets.NewString([]string{"ig"}...), defaultNamer)
 	pool := newNodePool(f, defaultZone)
+	pool.EnsureInstanceGroupInAllZones()
 
 	testCases := []struct {
 		activePorts   []int64
@@ -119,7 +123,7 @@ func TestSetNamedPorts(t *testing.T) {
 		// TODO: Add tests to remove named ports when we support that.
 	}
 	for _, test := range testCases {
-		igs, err := pool.EnsureInstanceGroupsAndPorts("ig", test.activePorts)
+		igs, err := pool.EnsurePortsInInstanceGroups(defaultNamer.InstanceGroup(), test.activePorts)
 		if err != nil {
 			t.Fatalf("unexpected error in setting ports %v to instance group: %s", test.activePorts, err)
 		}

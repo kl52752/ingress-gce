@@ -65,10 +65,9 @@ func NewNodePool(cloud InstanceGroups, namer namer.BackendNamer, recorders recor
 	}
 }
 
-// EnsureInstanceGroupsAndPorts creates or gets an instance group if it doesn't exist
-// and adds the given ports to it. Returns a list of one instance group per zone,
-// all of which have the exact same named ports.
-func (i *Instances) EnsureInstanceGroupsAndPorts(name string, ports []int64) (igs []*compute.InstanceGroup, err error) {
+// EnsurePortsInInstanceGroups gets an instance group in every zone and adds the given ports to it. Returns a list of one instance group per zone,
+// all of which have the exact same named ports or the error if IG doesn't exist.
+func (i *Instances) EnsurePortsInInstanceGroups(name string, ports []int64) (igs []*compute.InstanceGroup, err error) {
 	// Instance groups need to be created only in zones that have ready nodes.
 	zones, err := i.ListZones(utils.CandidateNodesPredicate)
 	if err != nil {
@@ -76,8 +75,13 @@ func (i *Instances) EnsureInstanceGroupsAndPorts(name string, ports []int64) (ig
 	}
 
 	for _, zone := range zones {
-		ig, err := i.ensureInstanceGroupAndPorts(name, zone, ports)
+		ig, err := i.Get(name, zone)
 		if err != nil {
+			klog.Errorf("Failed to get instance group %v/%v, err: %v", zone, name, err)
+			return nil, err
+		}
+
+		if err := i.ensurePortsInInstanceGroup(ig, ports); err != nil {
 			return nil, err
 		}
 
@@ -86,40 +90,16 @@ func (i *Instances) EnsureInstanceGroupsAndPorts(name string, ports []int64) (ig
 	return igs, nil
 }
 
-func (i *Instances) ensureInstanceGroupAndPorts(name, zone string, ports []int64) (*compute.InstanceGroup, error) {
-	ig, err := i.Get(name, zone)
-	if err != nil && !utils.IsHTTPErrorCode(err, http.StatusNotFound) {
-		klog.Errorf("Failed to get instance group %v/%v, err: %v", zone, name, err)
-		return nil, err
-	}
-
-	if ig == nil {
-		klog.V(3).Infof("Creating instance group %v/%v.", zone, name)
-		if err = i.cloud.CreateInstanceGroup(&compute.InstanceGroup{Name: name}, zone); err != nil {
-			// Error may come back with StatusConflict meaning the instance group was created by another controller
-			// possibly the Service Controller for internal load balancers.
-			if utils.IsHTTPErrorCode(err, http.StatusConflict) {
-				klog.Warningf("Failed to create instance group %v/%v due to conflict status, but continuing sync. err: %v", zone, name, err)
-			} else {
-				klog.Errorf("Failed to create instance group %v/%v, err: %v", zone, name, err)
-				return nil, err
-			}
-		}
-		ig, err = i.cloud.GetInstanceGroup(name, zone)
-		if err != nil {
-			klog.Errorf("Failed to get instance group %v/%v after ensuring existence, err: %v", zone, name, err)
-			return nil, err
-		}
-	} else {
-		klog.V(5).Infof("Instance group %v/%v already exists.", zone, name)
-	}
-
+func (i *Instances) ensurePortsInInstanceGroup(ig *compute.InstanceGroup, ports []int64) error {
 	// Build map of existing ports
 	existingPorts := map[int64]bool{}
 	for _, np := range ig.NamedPorts {
 		existingPorts[np.Port] = true
 	}
-
+	zone, err := utils.GetZoneFromURL(ig.Zone)
+	if err != nil {
+		return fmt.Errorf("Error ensuring instance group err: %v", err)
+	}
 	// Determine which ports need to be added
 	var newPorts []int64
 	for _, p := range ports {
@@ -137,13 +117,53 @@ func (i *Instances) ensureInstanceGroupAndPorts(name, zone string, ports []int64
 	}
 
 	if len(newNamedPorts) > 0 {
-		klog.V(3).Infof("Instance group %v/%v does not have ports %+v, adding them now.", zone, name, newPorts)
+		klog.V(3).Infof("Instance group %v/%v does not have ports %+v, adding them now.", zone, ig.Name, newPorts)
 		if err := i.cloud.SetNamedPortsOfInstanceGroup(ig.Name, zone, append(ig.NamedPorts, newNamedPorts...)); err != nil {
-			return nil, err
+			return err
 		}
 	}
 
-	return ig, nil
+	return nil
+}
+
+// EnsureInstanceGroupInAllZones creates new instance group with deafult name in given zone if not exist
+func (i *Instances) EnsureInstanceGroupInAllZones() error {
+	klog.V(3).Infof("EnsureInstanceGroupInAllZones")
+	igName := i.namer.InstanceGroup()
+	zones, err := i.ZoneLister.ListZones(utils.CandidateNodesPredicate)
+	if err != nil {
+		return err
+	}
+
+	for _, zone := range zones {
+		ig, err := i.Get(igName, zone)
+		if err != nil && !utils.IsHTTPErrorCode(err, http.StatusNotFound) {
+			klog.Errorf("Failed to get instance group %v/%v, err: %v", zone, igName, err)
+			return err
+		}
+
+		if ig == nil {
+			klog.V(3).Infof("Creating instance group %v/%v.", zone, igName)
+			if err = i.cloud.CreateInstanceGroup(&compute.InstanceGroup{Name: igName}, zone); err != nil {
+				// Error may come back with StatusConflict meaning the instance group was created by another controller
+				// possibly the Service Controller for internal load balancers.
+				if utils.IsHTTPErrorCode(err, http.StatusConflict) {
+					klog.Warningf("Failed to create instance group %v/%v due to conflict status, but continuing sync. err: %v", zone, igName, err)
+				} else {
+					klog.Errorf("Failed to create instance group %v/%v, err: %v", zone, igName, err)
+					return err
+				}
+			}
+			ig, err = i.cloud.GetInstanceGroup(igName, zone)
+			if err != nil {
+				klog.Errorf("Failed to get instance group %v/%v after ensuring existence, err: %v", zone, igName, err)
+				return err
+			}
+		} else {
+			klog.Errorf("Instance group %v/%v already exists. Zone %v", zone, igName, ig.Zone)
+		}
+	}
+	return nil
 }
 
 // DeleteInstanceGroup deletes the given IG by name, from all zones.

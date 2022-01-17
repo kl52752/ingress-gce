@@ -33,12 +33,14 @@ import (
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/util/retry"
 	"k8s.io/ingress-gce/pkg/annotations"
 	"k8s.io/ingress-gce/pkg/composite"
 	ingctx "k8s.io/ingress-gce/pkg/context"
 	"k8s.io/ingress-gce/pkg/healthchecks"
+	"k8s.io/ingress-gce/pkg/instances"
 	"k8s.io/ingress-gce/pkg/loadbalancers"
 	"k8s.io/ingress-gce/pkg/test"
 	"k8s.io/ingress-gce/pkg/utils"
@@ -70,7 +72,6 @@ func getPorts() []v1.ServicePort {
 		{Name: "port1", Port: 8084, Protocol: "TCP", NodePort: 30323},
 		{Name: "port2", Port: 8082, Protocol: "TCP", NodePort: 30323}}
 }
-
 func getSessionAffinityConfig() *v1.SessionAffinityConfig {
 	timeoutSec := int32(10)
 	return &v1.SessionAffinityConfig{ClientIP: &v1.ClientIPConfig{TimeoutSeconds: &timeoutSec}}
@@ -117,6 +118,7 @@ func createAndSyncNetLBSvc(t *testing.T) (svc *v1.Service, lc *L4NetLBController
 	svc = test.NewL4NetLBService(8080)
 	addNetLBService(lc, svc)
 	key, _ := common.KeyFunc(svc)
+	lc.instancePool.EnsureInstanceGroupInAllZones()
 	err := lc.sync(key)
 	if err != nil {
 		t.Errorf("Failed to sync newly added service %s, err %v", svc.Name, err)
@@ -149,13 +151,6 @@ func checkBackendService(lc *L4NetLBController, svc *v1.Service) error {
 		if !strings.Contains(b.Group, igName) {
 			return fmt.Errorf("Backend Ingstance Group Link mismatch: %s != %s", igName, b.Group)
 		}
-	}
-	ig, err := lc.ctx.Cloud.GetInstanceGroup(igName, testGCEZone)
-	if err != nil {
-		return fmt.Errorf("Error getting Instance Group, err %v", err)
-	}
-	if ig == nil {
-		return fmt.Errorf("Instance Group does not exist")
 	}
 	return nil
 }
@@ -200,7 +195,10 @@ func buildContext(vals gce.TestClusterValues) *ingctx.ControllerContext {
 		ResyncPeriod: 1 * time.Minute,
 		NumL4Workers: 5,
 	}
-	return ingctx.NewControllerContext(nil, kubeClient, nil, nil, nil, nil, nil, fakeGCE, namer, "" /*kubeSystemUID*/, ctxConfig)
+	ctx := ingctx.NewControllerContext(nil, kubeClient, nil, nil, nil, nil, nil, fakeGCE, namer, "" /*kubeSystemUID*/, ctxConfig)
+	fakeZL := &instances.FakeZoneLister{Zones: []string{vals.ZoneName}}
+	ctx.InstancePool = instances.NewNodePool(instances.NewFakeInstanceGroups(sets.NewString(), namer), namer, &test.FakeRecorderSource{}, utils.GetBasePath(fakeGCE), fakeZL)
+	return ctx
 }
 
 func newL4NetLBServiceController() *L4NetLBController {
@@ -214,7 +212,7 @@ func newL4NetLBServiceController() *L4NetLBController {
 	for _, n := range nodes {
 		ctx.NodeInformer.GetIndexer().Add(n)
 	}
-
+	ctx.InstancePool.EnsureInstanceGroupInAllZones()
 	return NewL4NetLBController(ctx, stopCh)
 }
 
@@ -466,35 +464,6 @@ func TestInternalLoadBalancerShouldNotBeProcessByL4NetLBController(t *testing.T)
 	}
 }
 
-func TestProcessServiceCreationFailed(t *testing.T) {
-	for _, param := range []struct {
-		addMockFunc   func(*cloud.MockGCE)
-		expectedError string
-	}{{addMockFunc: func(c *cloud.MockGCE) { c.MockInstanceGroups.GetHook = test.GetErrorInstanceGroupHook },
-		expectedError: "GetErrorInstanceGroupHook"},
-		{addMockFunc: func(c *cloud.MockGCE) { c.MockInstanceGroups.ListHook = test.ListErrorHook },
-			expectedError: "ListErrorHook"},
-		{addMockFunc: func(c *cloud.MockGCE) { c.MockInstanceGroups.InsertHook = test.InsertErrorHook },
-			expectedError: "InsertErrorHook"},
-
-		{addMockFunc: func(c *cloud.MockGCE) { c.MockInstanceGroups.AddInstancesHook = test.AddInstancesErrorHook },
-			expectedError: "AddInstances: [AddInstancesErrorHook]"},
-		{addMockFunc: func(c *cloud.MockGCE) { c.MockInstanceGroups.ListInstancesHook = test.ListInstancesWithErrorHook },
-			expectedError: "ListInstancesWithErrorHook"},
-		{addMockFunc: func(c *cloud.MockGCE) { c.MockInstanceGroups.SetNamedPortsHook = test.SetNamedPortsErrorHook },
-			expectedError: "SetNamedPortsErrorHook"},
-	} {
-		lc := newL4NetLBServiceController()
-		param.addMockFunc((lc.ctx.Cloud.Compute().(*cloud.MockGCE)))
-		svc := test.NewL4NetLBService(8080)
-		addNetLBService(lc, svc)
-		key, _ := common.KeyFunc(svc)
-		err := lc.sync(key)
-		if err == nil || err.Error() != param.expectedError {
-			t.Errorf("Error mismatch '%v' != '%v'", err.Error(), param.expectedError)
-		}
-	}
-}
 func TestProcessServiceDeletionFailed(t *testing.T) {
 	for _, param := range []struct {
 		addMockFunc   func(*cloud.MockGCE)

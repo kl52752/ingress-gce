@@ -47,7 +47,7 @@ func newTestRegionalIgLinker(fakeGCE *gce.Cloud, backendPool *Backends, l4Namer 
 	fakeIGs := instances.NewFakeInstanceGroups(sets.NewString(), l4Namer.Namer)
 	fakeZL := &instances.FakeZoneLister{Zones: []string{uscentralzone}}
 	fakeInstancePool := instances.NewNodePool(fakeIGs, l4Namer, &test.FakeRecorderSource{}, utils.GetBasePath(fakeGCE), fakeZL)
-
+	fakeInstancePool.EnsureInstanceGroupInAllZones()
 	(fakeGCE.Compute().(*cloud.MockGCE)).MockRegionBackendServices.UpdateHook = mock.UpdateRegionBackendServiceHook
 
 	return &RegionalInstanceGroupLinker{fakeInstancePool, backendPool}
@@ -65,7 +65,7 @@ func TestRegionalLink(t *testing.T) {
 	if err := linker.Link(sp, fakeGCE.ProjectID(), []string{uscentralzone}); err == nil {
 		t.Fatalf("Linking when instances does not exist should return error")
 	}
-	if _, err := linker.instancePool.EnsureInstanceGroupsAndPorts(l4Namer.InstanceGroup(), []int64{sp.NodePort}); err != nil {
+	if _, err := linker.instancePool.EnsurePortsInInstanceGroups(l4Namer.InstanceGroup(), []int64{sp.NodePort}); err != nil {
 		t.Fatalf("Unexpected error when ensuring IG for ServicePort %+v: %v", sp, err)
 	}
 	if err := linker.Link(sp, fakeGCE.ProjectID(), []string{uscentralzone}); err == nil {

@@ -29,7 +29,6 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/client-go/kubernetes"
 	unversionedcore "k8s.io/client-go/kubernetes/typed/core/v1"
-	listers "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/ingress-gce/pkg/annotations"
@@ -374,7 +373,7 @@ func (lbc *LoadBalancerController) SyncBackends(state interface{}) error {
 
 	// Only sync instance group when IG is used for this ingress
 	if len(nodePorts(ingSvcPorts)) > 0 {
-		if err := lbc.syncInstanceGroup(syncState.ing, ingSvcPorts); err != nil {
+		if err := lbc.syncInstanceGroupPorts(syncState.ing, ingSvcPorts); err != nil {
 			klog.Errorf("Failed to sync instance group for ingress %v: %v", syncState.ing, err)
 			return err
 		}
@@ -416,21 +415,12 @@ func (lbc *LoadBalancerController) SyncBackends(state interface{}) error {
 	return nil
 }
 
-// syncInstanceGroup creates instance groups, syncs instances, sets named ports and updates instance group annotation
-func (lbc *LoadBalancerController) syncInstanceGroup(ing *v1.Ingress, ingSvcPorts []utils.ServicePort) error {
+// syncInstanceGroupPorts sets named ports and updates instance group annotation
+func (lbc *LoadBalancerController) syncInstanceGroupPorts(ing *v1.Ingress, ingSvcPorts []utils.ServicePort) error {
 	nodePorts := nodePorts(ingSvcPorts)
 	klog.V(2).Infof("Syncing Instance Group for ingress %v/%v with nodeports %v", ing.Namespace, ing.Name, nodePorts)
-	igs, err := lbc.instancePool.EnsureInstanceGroupsAndPorts(lbc.ctx.ClusterNamer.InstanceGroup(), nodePorts)
+	igs, err := lbc.instancePool.EnsurePortsInInstanceGroups(lbc.ctx.ClusterNamer.InstanceGroup(), nodePorts)
 	if err != nil {
-		return err
-	}
-
-	nodeNames, err := utils.GetReadyNodeNames(listers.NewNodeLister(lbc.nodeLister))
-	if err != nil {
-		return err
-	}
-	// Add/remove instances to the instance groups.
-	if err = lbc.instancePool.Sync(nodeNames); err != nil {
 		return err
 	}
 
@@ -461,15 +451,6 @@ func (lbc *LoadBalancerController) GCBackends(toKeep []*v1.Ingress) error {
 	svcPortsToKeep := lbc.ToSvcPorts(GCEIngresses)
 	if err := lbc.backendSyncer.GC(svcPortsToKeep); err != nil {
 		return err
-	}
-	// TODO(ingress#120): Move this to the backend pool so it mirrors creation
-	// Do not delete instance group if there exists a GLBC ingress.
-	if len(toKeep) == 0 {
-		igName := lbc.ctx.ClusterNamer.InstanceGroup()
-		klog.Infof("Deleting instance group %v", igName)
-		if err := lbc.instancePool.DeleteInstanceGroup(igName); err != err {
-			return err
-		}
 	}
 	return nil
 }
