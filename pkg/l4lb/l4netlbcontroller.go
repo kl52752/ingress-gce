@@ -30,6 +30,7 @@ import (
 	"k8s.io/ingress-gce/pkg/backends"
 	"k8s.io/ingress-gce/pkg/context"
 	"k8s.io/ingress-gce/pkg/controller/translator"
+	"k8s.io/ingress-gce/pkg/flags"
 	"k8s.io/ingress-gce/pkg/instances"
 	"k8s.io/ingress-gce/pkg/loadbalancers"
 	"k8s.io/ingress-gce/pkg/utils"
@@ -364,7 +365,10 @@ func (lc *L4NetLBController) ensureInstanceGroups(service *v1.Service, nodeNames
 	if err != nil {
 		return err
 	}
-	return lc.instancePool.Sync(nodeNames)
+	if !flags.F.EnableMultipleIgs {
+		return lc.instancePool.Sync(nodeNames)
+	}
+	return nil
 }
 
 // hasLegacyForwardingRule return true if forwarding rule is target pool based

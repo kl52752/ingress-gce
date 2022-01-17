@@ -425,13 +425,15 @@ func (lbc *LoadBalancerController) syncInstanceGroup(ing *v1.Ingress, ingSvcPort
 		return err
 	}
 
-	nodeNames, err := utils.GetReadyNodeNames(listers.NewNodeLister(lbc.nodeLister))
-	if err != nil {
-		return err
-	}
-	// Add/remove instances to the instance groups.
-	if err = lbc.instancePool.Sync(nodeNames); err != nil {
-		return err
+	if !flags.F.EnableMultipleIgs {
+		nodeNames, err := utils.GetReadyNodeNames(listers.NewNodeLister(lbc.nodeLister))
+		if err != nil {
+			return err
+		}
+		// Add/remove instances to the instance groups.
+		if err = lbc.instancePool.Sync(nodeNames); err != nil {
+			return err
+		}
 	}
 
 	// TODO: Remove this after deprecation
@@ -464,7 +466,7 @@ func (lbc *LoadBalancerController) GCBackends(toKeep []*v1.Ingress) error {
 	}
 	// TODO(ingress#120): Move this to the backend pool so it mirrors creation
 	// Do not delete instance group if there exists a GLBC ingress.
-	if len(toKeep) == 0 {
+	if !flags.F.EnableMultipleIgs && len(toKeep) == 0 {
 		igName := lbc.ctx.ClusterNamer.InstanceGroup()
 		klog.Infof("Deleting instance group %v", igName)
 		if err := lbc.instancePool.DeleteInstanceGroup(igName); err != err {

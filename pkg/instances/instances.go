@@ -25,6 +25,7 @@ import (
 	"google.golang.org/api/compute/v1"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/ingress-gce/pkg/events"
+	"k8s.io/ingress-gce/pkg/flags"
 	"k8s.io/ingress-gce/pkg/utils/namer"
 	"k8s.io/klog"
 
@@ -88,7 +89,7 @@ func (i *Instances) EnsureInstanceGroupsAndPorts(name string, ports []int64) (ig
 
 func (i *Instances) ensureInstanceGroupAndPorts(name, zone string, ports []int64) (*compute.InstanceGroup, error) {
 	ig, err := i.Get(name, zone)
-	if err != nil && !utils.IsHTTPErrorCode(err, http.StatusNotFound) {
+	if err != nil && (flags.F.EnableMultipleIgs || !utils.IsHTTPErrorCode(err, http.StatusNotFound)) {
 		klog.Errorf("Failed to get instance group %v/%v, err: %v", zone, name, err)
 		return nil, err
 	}

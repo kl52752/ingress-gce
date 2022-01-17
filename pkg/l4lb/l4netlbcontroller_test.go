@@ -491,7 +491,7 @@ func TestProcessServiceCreationFailed(t *testing.T) {
 		key, _ := common.KeyFunc(svc)
 		err := lc.sync(key)
 		if err == nil || err.Error() != param.expectedError {
-			t.Errorf("Error mismatch '%v' != '%v'", err.Error(), param.expectedError)
+			t.Errorf("Error mismatch '%v' != '%v'", err, param.expectedError)
 		}
 	}
 }
