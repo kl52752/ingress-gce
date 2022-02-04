@@ -69,6 +69,17 @@ type L4ILBServiceState struct {
 	InSuccess bool
 }
 
+// L4NetLBServiceState defines if global access and subnet features are enabled
+// for an L4 NetLB service.
+type L4NetLBServiceState struct {
+	// IsManagedIP specifies if Static IP is managed by controller.
+	IsManagedIP bool
+	// IsPremiumTier specifies if network tier for forwarding rule is premium.
+	IsPremiumTier bool
+	// InSuccess specifies if the NetLB service VIP is configured.
+	InSuccess bool
+}
+
 // IngressMetricsCollector is an interface to update/delete ingress states in the cache
 // that is used for computing ingress usage metrics.
 type IngressMetricsCollector interface {
