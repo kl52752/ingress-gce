@@ -17,6 +17,8 @@ limitations under the License.
 package utils
 
 import (
+	"time"
+
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/klog"
@@ -35,6 +37,12 @@ type TaskQueue interface {
 	NumRequeues(obj interface{}) int
 }
 
+// TimestampTask defines service key and enqueue timestamp
+type TimestampTask struct {
+	EnqueueTime time.Time
+	SvcKey      string
+}
+
 // PeriodicTaskQueueWithMultipleWorkers invokes the given sync function for every work item
 // inserted, while running n parallel worker routines. If the sync() function results in an error, the item is put on
 // the work queue after a rate-limit.
@@ -46,7 +54,7 @@ type PeriodicTaskQueueWithMultipleWorkers struct {
 	// queue is the work queue the workers poll.
 	queue workqueue.RateLimitingInterface
 	// sync is called for each item in the queue.
-	sync func(string) error
+	sync func(TimestampTask) error
 	// The respective workerDone channel is closed when the worker exits. There is one channel per worker.
 	workerDone []chan struct{}
 	// numWorkers indicates the number of worker routines processing the queue.
@@ -60,8 +68,11 @@ func (t *PeriodicTaskQueueWithMultipleWorkers) Len() int {
 
 // NumRequeues returns the number of times the given item was requeued.
 func (t *PeriodicTaskQueueWithMultipleWorkers) NumRequeues(obj interface{}) int {
-	key, _ := t.keyFunc(obj)
-	return t.queue.NumRequeues(key)
+	task, ok := obj.(TimestampTask)
+	if !ok {
+		klog.Fatalf("provided InstancePool must be of type MultiIGInstances")
+	}
+	return t.queue.NumRequeues(task)
 }
 
 // runInternal invokes the worker routine to pick up and process an item from the queue. This blocks until ShutDown is called.
@@ -73,7 +84,7 @@ func (t *PeriodicTaskQueueWithMultipleWorkers) runInternal(workerId int) {
 			return
 		}
 		klog.V(4).Infof("Worker-%d: Syncing %v (%v)", workerId, key, t.resource)
-		if err := t.sync(key.(string)); err != nil {
+		if err := t.sync(key.(TimestampTask)); err != nil {
 			klog.Errorf("Worker-%d: Requeuing %q due to error: %v (%v)", workerId, key, err, t.resource)
 			t.queue.AddRateLimited(key)
 		} else {
@@ -95,13 +106,9 @@ func (t *PeriodicTaskQueueWithMultipleWorkers) Run() {
 // Enqueue adds one or more keys to the work queue.
 func (t *PeriodicTaskQueueWithMultipleWorkers) Enqueue(objs ...interface{}) {
 	for _, obj := range objs {
-		key, err := t.keyFunc(obj)
-		if err != nil {
-			klog.Errorf("Couldn't get key for object %+v (type %T): %v", obj, obj, err)
-			return
-		}
+		key := obj.(TimestampTask).SvcKey
 		klog.V(4).Infof("Enqueue key=%q (%v)", key, t.resource)
-		t.queue.Add(key)
+		t.queue.Add(obj)
 	}
 }
 
@@ -116,7 +123,7 @@ func (t *PeriodicTaskQueueWithMultipleWorkers) Shutdown() {
 }
 
 // NewPeriodicTaskQueueWithMultipleWorkers creates a new task queue with the default rate limiter and the given number of worker goroutines.
-func NewPeriodicTaskQueueWithMultipleWorkers(name, resource string, numWorkers int, syncFn func(string) error) *PeriodicTaskQueueWithMultipleWorkers {
+func NewPeriodicTaskQueueWithMultipleWorkers(name, resource string, numWorkers int, syncFn func(TimestampTask) error) *PeriodicTaskQueueWithMultipleWorkers {
 	if numWorkers <= 0 {
 		klog.Errorf("Invalid worker count %d", numWorkers)
 		return nil

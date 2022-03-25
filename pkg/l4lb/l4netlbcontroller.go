@@ -283,20 +283,20 @@ func (lc *L4NetLBController) shutdown() {
 	lc.svcQueue.Shutdown()
 }
 
-func (lc *L4NetLBController) sync(key string) error {
+func (lc *L4NetLBController) sync(task utils.TimestampTask) error {
 	lc.syncTracker.Track()
-	svc, exists, err := lc.ctx.Services().GetByKey(key)
+	svc, exists, err := lc.ctx.Services().GetByKey(task.SvcKey)
 	if err != nil {
-		return fmt.Errorf("Failed to lookup L4 External LoadBalancer service for key %s : %w", key, err)
+		return fmt.Errorf("Failed to lookup L4 External LoadBalancer service for key %s : %w", task.SvcKey, err)
 	}
 	if !exists || svc == nil {
-		klog.V(3).Infof("Ignoring sync of non-existent service %s", key)
+		klog.V(3).Infof("Ignoring sync of non-existent service %s", task.SvcKey)
 		return nil
 	}
 	namespacedName := types.NamespacedName{Name: svc.Name, Namespace: svc.Namespace}.String()
 	if lc.needsDeletion(svc) {
-		klog.V(3).Infof("Deleting L4 External LoadBalancer resources for service %s", key)
-		result := lc.garbageCollectRBSNetLB(key, svc)
+		klog.V(3).Infof("Deleting L4 External LoadBalancer resources for service %s", task.SvcKey)
+		result := lc.garbageCollectRBSNetLB(task.SvcKey, svc)
 		if result == nil {
 			return nil
 		}
@@ -313,7 +313,7 @@ func (lc *L4NetLBController) sync(key string) error {
 		lc.publishMetrics(result, namespacedName)
 		return result.Error
 	}
-	klog.V(3).Infof("Ignoring sync of service %s, neither delete nor ensure needed.", key)
+	klog.V(3).Infof("Ignoring sync of service %s, neither delete nor ensure needed.", task.SvcKey)
 	return nil
 }
 

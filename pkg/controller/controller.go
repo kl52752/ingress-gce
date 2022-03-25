@@ -597,26 +597,26 @@ func (lbc *LoadBalancerController) postSyncGC(key string, syncErr error, oldScop
 }
 
 // sync manages Ingress create/updates/deletes events from queue.
-func (lbc *LoadBalancerController) sync(key string) error {
+func (lbc *LoadBalancerController) sync(task utils.TimestampTask) error {
 	if !lbc.hasSynced() {
 		time.Sleep(context.StoreSyncPollPeriod)
 		return fmt.Errorf("waiting for stores to sync")
 	}
-	klog.V(3).Infof("Syncing %v", key)
+	klog.V(3).Infof("Syncing %v", task.SvcKey)
 
-	ing, ingExists, err := lbc.ctx.Ingresses().GetByKey(key)
+	ing, ingExists, err := lbc.ctx.Ingresses().GetByKey(task.SvcKey)
 	if err != nil {
-		return fmt.Errorf("error getting Ingress for key %s: %v", key, err)
+		return fmt.Errorf("error getting Ingress for key %s: %v", task.SvcKey, err)
 	}
 
 	// Capture GC state for ingress.
 	scope := features.ScopeFromIngress(ing)
-	needSync, err := lbc.preSyncGC(key, scope, ingExists, ing)
+	needSync, err := lbc.preSyncGC(task.SvcKey, scope, ingExists, ing)
 	if err != nil {
 		return err
 	}
 	if !needSync {
-		klog.V(2).Infof("Ingress %q does not need to be synced. Skipping sync", key)
+		klog.V(2).Infof("Ingress %q does not need to be synced. Skipping sync", task.SvcKey)
 		return nil
 	}
 
@@ -650,7 +650,7 @@ func (lbc *LoadBalancerController) sync(key string) error {
 				return err
 			}
 		}
-		lbc.metrics.SetIngress(key, metrics.NewIngressState(ing, fc, urlMap.AllServicePorts()))
+		lbc.metrics.SetIngress(task.SvcKey, metrics.NewIngressState(ing, fc, urlMap.AllServicePorts()))
 	}
 
 	// Check for scope change GC
@@ -663,7 +663,7 @@ func (lbc *LoadBalancerController) sync(key string) error {
 		scope = *oldScope
 	}
 
-	return lbc.postSyncGC(key, syncErr, oldScope, scope, ingExists, ing)
+	return lbc.postSyncGC(task.SvcKey, syncErr, oldScope, scope, ingExists, ing)
 }
 
 // updateIngressStatus updates the IP and annotations of a loadbalancer.
